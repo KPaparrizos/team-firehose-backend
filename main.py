@@ -22,7 +22,7 @@ FT_TO_IN = 12
 MIN_TO_S = 60
 FT3_TO_GAL = 7.48052
 
-
+# Pydantic models for input validation
 class InputValue(BaseModel):
     value: str 
     unit: str
@@ -30,14 +30,17 @@ class InputValue(BaseModel):
 class CalculatorData(BaseModel):
     selectedFormulas: list[str]
     flowMethod: str
-    pressure: InputValue
+    pressure: Optional[InputValue] = None
     flowRate: Optional[InputValue] = None
-    mass: Optional[InputValue] = None
-    time: Optional[InputValue] = None
+    flowMassChange: Optional[InputValue] = None
+    flowTime: Optional[InputValue] = None
     nozzleDiameter: Optional[InputValue] = None
-    hoseLength: Optional[InputValue] = None
+    hoseDiameter: Optional[InputValue] = None
+    kickbackMassChange: Optional[InputValue] = None
+    rodLength: Optional[InputValue] = None
+    wheelRadius: Optional[InputValue] = None
 
-# --- Data Standardization Helpers ---
+# Data standardization helpers
 def to_float(val_str: str) -> float:
     try:
         return float(val_str)
@@ -68,12 +71,18 @@ def get_flow_rate_gpm(data: CalculatorData) -> float:
         
     return 0.0
 
-def get_diameter_in(input_val: Optional[InputValue]) -> float:
+def get_length_in(input_val: Optional[InputValue]) -> float:
     if not input_val or not input_val.value: return 0.0
     val = to_float(input_val.value)
     return val * 0.0393701 if input_val.unit == "mm" else val
 
-# --- Formulas ---
+def get_mass_lb(input_val: Optional[InputValue]) -> float:
+    if not input_val or not input_val.value: return 0.0
+    val = to_float(input_val.value)
+    return val * 0.0393701 if input_val.unit == "kg" else val
+
+
+# Formulas
 def calculate_actual(rod_length_in: float, wheel_radius_in: float, mass_change_lb) -> float:
     # Formula: mg * ((r + w) / w) (where r is rod length, w is wheel radius)
     # Inches from rod_length/wheel_radius should cancel, resulting in lbf
@@ -101,33 +110,48 @@ def calculate_chin_11 (flow_rate_gpm: float, pressure_psi: float, hose_diameter_
     return np.sqrt(2 * RHO * (((flow_rate_gpm / FT3_TO_GAL) / MIN_TO_S) ** 2) * (pressure_psi * (FT_TO_IN ** 2)) + ((RHO ** 2) * (((flow_rate_gpm / FT3_TO_GAL) / MIN_TO_S) ** 4)) 
                    / ((np.pi * (((hose_diameter_in / FT_TO_IN) / 2) ** 2))) ** 2)
 
+# FastAPI request functions
+#TODO: Add a case statement so we can check which data helpers we need to use, don't call any multiple times
+#TODO: Convert units before returning results
+#TODO: Let user select which units they want the output to be in as well
 @app.post("/calculate-force")
 async def calculate_force(data: CalculatorData):
     results = {}
     
     try:
-        # Standardize core variables first
-        pressure_psi = get_pressure_psi(data.pressure)
-        flow_rate_gpm = get_flow_rate_gpm(data)
-        
+        # Loop through all selected formulas and calculate, storing results in result dictionary
         for formula in data.selectedFormulas:
             if formula == "Experimental (Actual)":
-                results[formula] = calculate_actual(rod_length_in, wheel_radius_in, mass_change_lb)
+                rod_length_in = get_length_in(data.rodLength)
+                wheel_radius_in = get_length_in(data.wheelRadius)
+                kickback_mass_change_lb = get_mass_lb(data.kickbackMassChange)
+
+                results[formula] = calculate_actual(rod_length_in, wheel_radius_in, kickback_mass_change_lb)
             elif formula == "NFPA Equation":
-                dia_in = get_diameter_in(data.nozzleDiameter)
-                results[formula] = calculate_freeman(pressure_psi, dia_in)
+                pressure_psi = get_pressure_psi(data.pressure)
+                nozzle_diameter_in = get_length_in(data.nozzleDiameter)
+
+                results[formula] = calculate_nfpa(pressure_psi, nozzle_diameter_in)
             elif formula == "Chin et al. Equation (7)":
-                # Add your modified research logic here
-                results[formula] = pressure_psi * 1.1 
+                flow_rate_gpm = get_flow_rate_gpm(data)
+                nozzle_diameter_in = get_length_in(data.nozzleDiameter)
+
+                results[formula] = calculate_chin_7(flow_rate_gpm, nozzle_diameter_in)
             elif formula == "Chin et al. Equation (10)":
-                # Add your modified research logic here
-                results[formula] = pressure_psi * 1.1 
+                pressure_psi = get_pressure_psi(data.pressure)
+                hose_diameter_in = get_length_in(data.hoseDiameter)
+                nozzle_diameter_in = get_length_in(data.nozzleDiameter)
+
+                results[formula] = calculate_chin_10(pressure_psi, hose_diameter_in, nozzle_diameter_in)
             elif formula == "Chin et al. Equation (11)":
-                # Add your modified research logic here
-                results[formula] = pressure_psi * 1.1 
+                flow_rate_gpm = get_flow_rate_gpm(data)
+                pressure_psi = get_pressure_psi(data.pressure)
+                hose_diameter_in = get_length_in(data.hoseDiameter)
+
+                results[formula] = calculate_chin_11(flow_rate_gpm, pressure_psi, hose_diameter_in)
                 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
             
-    # Now returns {"results": {"Standard (NFPA)": 150.5, ...}}
+    # Returns {"results": {"Experimental (Actual)": 150.5, ...}}
     return {"results": results}
