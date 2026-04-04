@@ -21,6 +21,10 @@ G = 32.174 # Acceleration due to gravity in ft/s^2
 FT_TO_IN = 12
 MIN_TO_S = 60
 FT3_TO_GAL = 7.48052
+BAR_TO_PSI = 14.5038
+L_TO_GAL = 0.264172
+IN_TO_CM = 2.54
+G_TO_SLUGS = 0.0000685218
 
 # Pydantic models for input validation
 class InputValue(BaseModel):
@@ -48,38 +52,60 @@ def to_float(val_str: str) -> float:
         return 0.0
 
 def get_pressure_psi(input_val: InputValue) -> float:
+    if not input_val or not input_val.value: return 0.0
     val = to_float(input_val.value)
-    return val * 14.5038 if input_val.unit == "bar" else val
+    
+    # Converting to units used in equations
+    if input_val.unit == "bar":
+        val = val * BAR_TO_PSI
+
+    return val 
 
 def get_flow_rate_gpm(data: CalculatorData) -> float:
-    # Handle Direct Input
+    if not CalculatorData or not CalculatorData.flowMethod: return 0.0
+
+    # Handle direct input
     if data.flowMethod == "direct" and data.flowRate:
         val = to_float(data.flowRate.value)
-        return val * 0.264172 if data.flowRate.unit == "lpm" else val
+
+        if data.flowRate.unit == "lpm":
+            val = val * L_TO_GAL
+        elif data.flowRate.unit == "lps":
+            val = (val * L_TO_GAL) / (MIN_TO_S)
+
+        return val 
         
-    # Handle Mass/Time Input
+    # Handle mass/time input
     elif data.flowMethod == "mass-time" and data.mass and data.time:
         mass_val = to_float(data.mass.value)
-        mass_lbs = mass_val * 2.20462 if data.mass.unit == "kg" else mass_val
+
+        if data.mass.unit == "g":
+            mass_val = mass_val * G_TO_SLUGS
+
         
         time_val = to_float(data.time.value)
-        time_mins = time_val / 60.0 if data.time.unit == "sec" else time_val
         
-        # 1 Gallon of water = ~8.34 lbs
-        gallons = mass_lbs / 8.34
-        return gallons / time_mins if time_mins > 0 else 0.0
+        gallons = mass_val / RHO
+        return gallons / time_val if time_val > 0 else 0.0
         
-    return 0.0
+    else:
+        return 0.0
 
 def get_length_in(input_val: Optional[InputValue]) -> float:
     if not input_val or not input_val.value: return 0.0
-    val = to_float(input_val.value)
-    return val * 0.0393701 if input_val.unit == "mm" else val
+
+    if input_val.unit == "cm":
+        val = val / IN_TO_CM
+
+    return val 
 
 def get_mass_lb(input_val: Optional[InputValue]) -> float:
     if not input_val or not input_val.value: return 0.0
-    val = to_float(input_val.value)
-    return val * 0.0393701 if input_val.unit == "kg" else val
+
+    if input_val.unit == "g":
+        val = val * G_TO_LB
+
+    return val 
 
 
 # Formulas
