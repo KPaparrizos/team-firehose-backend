@@ -13,8 +13,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-RHO = 8.34 # Fluid density of water in gpm at ~60-70 F
+# Physical constants:
+RHO = 1.94 # Fluid density of water in slugs/ft^3 at ~60-70 F
 G = 32.174 # Acceleration due to gravity in ft/s^2
+
+# Unit conversion constants:
+FT_TO_IN = 12
+MIN_TO_S = 60
+FT3_TO_GAL = 7.48052
+
 
 class InputValue(BaseModel):
     value: str 
@@ -69,25 +76,30 @@ def get_diameter_in(input_val: Optional[InputValue]) -> float:
 # --- Formulas ---
 def calculate_actual(rod_length_in: float, wheel_radius_in: float, mass_change_lb) -> float:
     # Formula: mg * ((r + w) / w) (where r is rod length, w is wheel radius)
-    return ((rod_length_in + wheel_radius_in) / wheel_radius_in) * G * mass_change_lb
+    # Inches from rod_length/wheel_radius should cancel, resulting in lbf
+    return ((rod_length_in + wheel_radius_in) / wheel_radius_in) * G  * mass_change_lb 
 
 def calculate_nfpa(pressure_psi: float, nozzle_diameter_in: float) -> float:
     # Formula: 1.57 * d^2 * p
+    # Inches from nozzle_diameter cancel out with inches from pressure, resulting in lbf
     return 1.57 * (nozzle_diameter_in ** 2) * pressure_psi
 
 def calculate_chin_7 (flow_rate_gpm: float, nozzle_diameter_in: float) -> float:
     # Formula: ρ * Q^2​ / A2^2 
-    return RHO * (flow_rate_gpm ** 2) / (np.pi * ((nozzle_diameter_in / 2) ** 2))
+    # After unit conversions, result should be dimensionally consistent and in lbf
+    return RHO * (((flow_rate_gpm / FT3_TO_GAL) / MIN_TO_S) ** 2) / (np.pi * (((nozzle_diameter_in / FT_TO_IN)) / 2) ** 2)
 
 def calculate_chin_10 (pressure_psi: float, hose_diameter_in, nozzle_diameter_in: float) -> float:
     # Formula: 2 * p * A2 / (1 - (A2 / A1)^2)
+    # Inches from nozzle_diameter cancel out with inches from pressure, resulting in lbf
     return 2 * pressure_psi * (np.pi * ((nozzle_diameter_in / 2) ** 2)) / (1 - ((np.pi * ((nozzle_diameter_in / 2) ** 2)) 
                                                                                 / (np.pi * ((hose_diameter_in / 2) ** 2))) ** 2)
 
 def calculate_chin_11 (flow_rate_gpm: float, pressure_psi: float, hose_diameter_in: float) -> float:
     # Formula: sqrt(2 * ρ * Q^2 * p + (ρ^2 * Q^4) / A1^2)
-    return np.sqrt(2 * RHO * (flow_rate_gpm ** 2) * pressure_psi + ((RHO ** 2) * (flow_rate_gpm ** 4)) 
-                   / ((np.pi * ((hose_diameter_in / 2) ** 2))) ** 2)
+    # After unit conversions, result should be dimensionally consistent and in lbf
+    return np.sqrt(2 * RHO * (((flow_rate_gpm / FT3_TO_GAL) / MIN_TO_S) ** 2) * (pressure_psi * (FT_TO_IN ** 2)) + ((RHO ** 2) * (((flow_rate_gpm / FT3_TO_GAL) / MIN_TO_S) ** 4)) 
+                   / ((np.pi * (((hose_diameter_in / FT_TO_IN) / 2) ** 2))) ** 2)
 
 @app.post("/calculate-force")
 async def calculate_force(data: CalculatorData):
