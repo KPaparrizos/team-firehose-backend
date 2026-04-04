@@ -1,4 +1,5 @@
 from typing import Optional
+import numpy as np
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+RHO = 8.34 # Fluid density of water in gpm at ~60-70 F
+G = 32.174 # Acceleration due to gravity in ft/s^2
 
 class InputValue(BaseModel):
     value: str 
@@ -63,15 +67,27 @@ def get_diameter_in(input_val: Optional[InputValue]) -> float:
     return val * 0.0393701 if input_val.unit == "mm" else val
 
 # --- Formulas ---
-def calculate_nfpa(pressure_psi: float, flow_rate_gpm: float) -> float:
-    # Example NFPA Formula (Reaction = 0.0505 * Q * sqrt(P))
-    # Replace with your exact mathematical logic
-    return 0.0505 * flow_rate_gpm * (pressure_psi ** 0.5)
+def calculate_actual(rod_length_in: float, wheel_radius_in: float, mass_change_lb) -> float:
+    # Formula: mg * ((r + w) / w) (where r is rod length, w is wheel radius)
+    return ((rod_length_in + wheel_radius_in) / wheel_radius_in) * G * mass_change_lb
 
-def calculate_freeman(pressure_psi: float, diameter_in: float) -> float:
-    # Example Freeman Formula (Reaction = 1.5 * d^2 * p)
-    # Replace with your exact mathematical logic
-    return 1.5 * (diameter_in ** 2) * pressure_psi
+def calculate_nfpa(pressure_psi: float, nozzle_diameter_in: float) -> float:
+    # Formula: 1.57 * d^2 * p
+    return 1.57 * (nozzle_diameter_in ** 2) * pressure_psi
+
+def calculate_chin_7 (flow_rate_gpm: float, nozzle_diameter_in: float) -> float:
+    # Formula: ρ * Q^2​ / A2^2 
+    return RHO * (flow_rate_gpm ** 2) / (np.pi * ((nozzle_diameter_in / 2) ** 2))
+
+def calculate_chin_10 (pressure_psi: float, hose_diameter_in, nozzle_diameter_in: float) -> float:
+    # Formula: 2 * p * A2 / (1 - (A2 / A1)^2)
+    return 2 * pressure_psi * (np.pi * ((nozzle_diameter_in / 2) ** 2)) / (1 - ((np.pi * ((nozzle_diameter_in / 2) ** 2)) 
+                                                                                / (np.pi * ((hose_diameter_in / 2) ** 2))) ** 2)
+
+def calculate_chin_11 (flow_rate_gpm: float, pressure_psi: float, hose_diameter_in: float) -> float:
+    # Formula: sqrt(2 * ρ * Q^2 * p + (ρ^2 * Q^4) / A1^2)
+    return np.sqrt(2 * RHO * (flow_rate_gpm ** 2) * pressure_psi + ((RHO ** 2) * (flow_rate_gpm ** 4)) 
+                   / ((np.pi * ((hose_diameter_in / 2) ** 2))) ** 2)
 
 @app.post("/calculate-force")
 async def calculate_force(data: CalculatorData):
@@ -83,12 +99,18 @@ async def calculate_force(data: CalculatorData):
         flow_rate_gpm = get_flow_rate_gpm(data)
         
         for formula in data.selectedFormulas:
-            if formula == "Standard (NFPA)":
-                results[formula] = calculate_nfpa(pressure_psi, flow_rate_gpm)
-            elif formula == "Freeman Formula":
+            if formula == "Experimental (Actual)":
+                results[formula] = calculate_actual(rod_length_in, wheel_radius_in, mass_change_lb)
+            elif formula == "NFPA Equation":
                 dia_in = get_diameter_in(data.nozzleDiameter)
                 results[formula] = calculate_freeman(pressure_psi, dia_in)
-            elif formula == "Modified Research":
+            elif formula == "Chin et al. Equation (7)":
+                # Add your modified research logic here
+                results[formula] = pressure_psi * 1.1 
+            elif formula == "Chin et al. Equation (10)":
+                # Add your modified research logic here
+                results[formula] = pressure_psi * 1.1 
+            elif formula == "Chin et al. Equation (11)":
                 # Add your modified research logic here
                 results[formula] = pressure_psi * 1.1 
                 
