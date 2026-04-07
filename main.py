@@ -43,7 +43,7 @@ class CalculatorData(BaseModel):
     kickbackMassChange: Optional[InputValue] = None
     rodLength: Optional[InputValue] = None
     wheelRadius: Optional[InputValue] = None
-
+    
 # Data standardization helpers
 def to_float(val_str: str) -> float:
     try:
@@ -62,57 +62,58 @@ def get_pressure_psi(input_val: InputValue) -> float:
     return val 
 
 def get_flow_rate_gpm(data: CalculatorData) -> float:
-    if not CalculatorData or not CalculatorData.flowMethod: return 0.0
+    if not data or not data.flowMethod: return 0.0 
 
-    # Handle direct input
     if data.flowMethod == "direct" and data.flowRate:
         val = to_float(data.flowRate.value)
-
         if data.flowRate.unit == "lpm":
             val = val * L_TO_GAL
         elif data.flowRate.unit == "lps":
-            val = (val * L_TO_GAL) / (MIN_TO_S)
-
+            val = (val * L_TO_GAL) * MIN_TO_S 
         return val 
         
-    # Handle mass/time input
-    elif data.flowMethod == "mass-time" and data.mass and data.time:
-        mass_val = to_float(data.mass.value)
-
-        if data.mass.unit == "g":
+    elif data.flowMethod == "mass-time" and data.flowMassChange and data.flowTime:
+        mass_val = to_float(data.flowMassChange.value)
+        if data.flowMassChange.unit == "g":
             mass_val = mass_val * G_TO_SLUGS
+        elif data.flowMassChange.unit == "lb":
+            mass_val = mass_val / G
+        
+        time_val = to_float(data.flowTime.value)
+        if data.flowTime.unit == "min": # Check if you added min to frontend
+             time_val = time_val * MIN_TO_S
 
-        
-        time_val = to_float(data.time.value)
-        
-        gallons = mass_val / RHO
-        return gallons / time_val if time_val > 0 else 0.0
-        
-    else:
-        return 0.0
+        slugs_per_sec = mass_val / time_val if time_val > 0 else 0.0
+        # Convert slugs/s to gpm: (slugs/s / RHO) = ft3/s -> * FT3_TO_GAL * 60
+        return (slugs_per_sec / RHO) * FT3_TO_GAL * MIN_TO_S
+    
+    return 0.0
 
 def get_length_in(input_val: Optional[InputValue]) -> float:
     if not input_val or not input_val.value: return 0.0
+    val = to_float(input_val.value) 
 
     if input_val.unit == "cm":
         val = val / IN_TO_CM
+    return val
 
-    return val 
-
-def get_mass_lb(input_val: Optional[InputValue]) -> float:
+def get_mass_slugs(input_val: Optional[InputValue]) -> float:
     if not input_val or not input_val.value: return 0.0
-
+    val = to_float(input_val.value)
+    
     if input_val.unit == "g":
-        val = val * G_TO_LB
+        val = val * G_TO_SLUGS
+    elif input_val.unit == "lb":
+        val = val / G
 
     return val 
 
 
 # Formulas
-def calculate_actual(rod_length_in: float, wheel_radius_in: float, mass_change_lb) -> float:
+def calculate_actual(rod_length_in: float, wheel_radius_in: float, mass_change_slugs) -> float:
     # Formula: mg * ((r + w) / w) (where r is rod length, w is wheel radius)
     # Inches from rod_length/wheel_radius should cancel, resulting in lbf
-    return ((rod_length_in + wheel_radius_in) / wheel_radius_in) * G  * mass_change_lb 
+    return ((rod_length_in + wheel_radius_in) / wheel_radius_in) * G  * mass_change_slugs
 
 def calculate_nfpa(pressure_psi: float, nozzle_diameter_in: float) -> float:
     # Formula: 1.57 * d^2 * p
@@ -150,9 +151,9 @@ async def calculate_force(data: CalculatorData):
             if formula == "Experimental (Actual)":
                 rod_length_in = get_length_in(data.rodLength)
                 wheel_radius_in = get_length_in(data.wheelRadius)
-                kickback_mass_change_lb = get_mass_lb(data.kickbackMassChange)
+                kickback_mass_change_slugs = get_mass_slugs(data.kickbackMassChange)
 
-                results[formula] = calculate_actual(rod_length_in, wheel_radius_in, kickback_mass_change_lb)
+                results[formula] = calculate_actual(rod_length_in, wheel_radius_in, kickback_mass_change_slugs)
             elif formula == "NFPA Equation":
                 pressure_psi = get_pressure_psi(data.pressure)
                 nozzle_diameter_in = get_length_in(data.nozzleDiameter)
